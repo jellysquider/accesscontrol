@@ -1,30 +1,41 @@
 package door
 
 import (
+	"fmt"
 	rpio "github.com/stianeikeland/go-rpio/v4"
 	"log"
 	"sync"
 	"time"
 )
 
-type Control struct {
+type Door struct {
 	pin      rpio.Pin
 	mutex    sync.Mutex
 	refCount int
 }
 
-func New() Control {
+func New() Door {
 	pin := rpio.Pin(21)
 	pin.Output()
 	pin.Low()
-	return Control{pin: pin}
+	return Door{pin: pin}
 }
 
-func (c *Control) UnlockForDuration(duration time.Duration, authorizedBy string) {
+const maxDuration = time.Second * 30
+
+func (c *Door) UnlockForDuration(duration time.Duration, authorizedBy string) error {
+	if duration > maxDuration {
+		return fmt.Errorf("duration (%.0f) is longer than maximum allowed (%.0f)", duration.Seconds(), maxDuration.Seconds())
+	}
+
+	if duration <= 0 {
+		return fmt.Errorf("duration (%.0f) must be greater than 0", duration.Seconds())
+	}
+
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
-	c.Unlock(authorizedBy)
+	c.unlock(authorizedBy)
 	c.refCount++
 
 	go func() {
@@ -35,17 +46,19 @@ func (c *Control) UnlockForDuration(duration time.Duration, authorizedBy string)
 
 		c.refCount--
 		if c.refCount == 0 {
-			c.Lock(authorizedBy)
+			c.lock(authorizedBy)
 		}
 	}()
+
+	return nil
 }
 
-func (c *Control) Unlock(authorizedBy string) {
+func (c *Door) unlock(authorizedBy string) {
 	c.pin.High()
 	log.Printf("door unlocked (%s)\n", authorizedBy)
 }
 
-func (c *Control) Lock(authorizedBy string) {
+func (c *Door) lock(authorizedBy string) {
 	c.pin.Low()
 	log.Printf("door locked (%s)\n", authorizedBy)
 }
