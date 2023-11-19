@@ -1,6 +1,8 @@
 package door
 
 import (
+	"bytes"
+	cryptoRand "crypto/rand"
 	"fmt"
 	rpio "github.com/stianeikeland/go-rpio/v4"
 	"log"
@@ -9,9 +11,9 @@ import (
 )
 
 type Door struct {
-	pin      rpio.Pin
-	mutex    sync.Mutex
-	refCount int
+	pin                rpio.Pin
+	mutex              sync.Mutex
+	delayedUnlockNonce []byte
 }
 
 func New() Door {
@@ -32,11 +34,14 @@ func (c *Door) UnlockForDuration(duration time.Duration, authorizedBy string) er
 		return fmt.Errorf("duration (%.0f) must be greater than 0", duration.Seconds())
 	}
 
+	c.unlock(authorizedBy)
+
+	delayedUnlockNonce := make([]byte, 32)
+	cryptoRand.Read(delayedUnlockNonce)
+
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-
-	c.unlock(authorizedBy)
-	c.refCount++
+	c.delayedUnlockNonce = delayedUnlockNonce
 
 	go func() {
 		time.Sleep(duration)
@@ -44,8 +49,7 @@ func (c *Door) UnlockForDuration(duration time.Duration, authorizedBy string) er
 		c.mutex.Lock()
 		defer c.mutex.Unlock()
 
-		c.refCount--
-		if c.refCount == 0 {
+		if bytes.Equal(c.delayedUnlockNonce, delayedUnlockNonce) {
 			c.lock(authorizedBy)
 		}
 	}()
@@ -58,7 +62,23 @@ func (c *Door) unlock(authorizedBy string) {
 	log.Printf("door unlocked (%s)\n", authorizedBy)
 }
 
+func (c *Door) Unlock(authorizedBy string) {
+	c.unlock(authorizedBy)
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.delayedUnlockNonce = nil
+}
+
 func (c *Door) lock(authorizedBy string) {
 	c.pin.Low()
 	log.Printf("door locked (%s)\n", authorizedBy)
+}
+
+func (c *Door) Lock(authorizedBy string) {
+	c.lock(authorizedBy)
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.delayedUnlockNonce = nil
 }
