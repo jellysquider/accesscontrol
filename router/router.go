@@ -45,6 +45,10 @@ func RunRouter() {
 		return c.NoContent(http.StatusOK)
 	})
 
+	e.HEAD("/", func(c echo.Context) error {
+		return c.NoContent(http.StatusOK)
+	})
+
 	e.GET("/api/v1/status", func(c echo.Context) error {
 		return jsonResponse(c, http.StatusOK, "door control available")
 	}, requireLocalNetworkMiddleware)
