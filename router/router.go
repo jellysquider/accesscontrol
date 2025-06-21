@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/doubleunion/accesscontrol/door"
@@ -18,6 +20,9 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"golang.org/x/crypto/acme/autocert"
 )
+
+const serviceFilePath = "/etc/systemd/system/accesscontrol.service"
+const ipQueryURL = "https://wtfismyip.com/text"
 
 var localInternetAddress = os.Getenv("LOCAL_INTERNET_ADDRESS")
 
@@ -110,4 +115,69 @@ func requireLocalNetworkMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		// Continue to the next middleware or route handler
 		return next(c)
 	}
+}
+
+func UpdateIPAndRestart() error {
+	// Step 1: Query current IP address
+	resp, err := http.Get(ipQueryURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	ipBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	currentIP := strings.TrimSpace(string(ipBytes))
+
+	// Step 2: Read the service file
+	content, err := os.ReadFile(serviceFilePath)
+	if err != nil {
+		return err
+	}
+
+	// Step 3: Check if the IP matches
+	lines := strings.Split(string(content), "\n")
+	var updatedContent []string
+	ipUpdated := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Environment=LOCAL_INTERNET_ADDRESS=") {
+			fileIP := strings.TrimPrefix(line, "Environment=LOCAL_INTERNET_ADDRESS=")
+			if fileIP != currentIP {
+				line = "Environment=LOCAL_INTERNET_ADDRESS=" + currentIP
+				ipUpdated = true
+			}
+		}
+		updatedContent = append(updatedContent, line)
+	}
+
+	// Step 4: Update the file if necessary
+	if ipUpdated {
+		// first we have to output the new contents to a temporary file
+		// because we don't have access to the service file directly
+		tempFilePath := "/tmp/accesscontrol.service"
+		err = os.WriteFile(tempFilePath, []byte(strings.Join(updatedContent, "\n")), 0644)
+		if err != nil {
+			return err
+		}
+
+		// then we copy the temporary file to the service file path
+		// the path is owned by the process user so this is allowed by the OS without sudo
+		cmd := exec.Command("cp", tempFilePath, serviceFilePath)
+		err = cmd.Run()
+		if err != nil {
+			return err
+		}
+
+		// Step 5: Restart the Raspberry Pi
+		cmd = exec.Command("sudo", "shutdown", "-r", "now")
+		//log.Printf("Error in updateIPAndRestart: %v", err)
+		err = cmd.Run()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
